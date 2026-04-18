@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html {
+    font-family: var(--font-inter), system-ui, sans-serif;
+    background-color: #faf7f0;
+    color: #1f2937;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-brand-bg text-brand-primary;
+    font-feature-settings: "kern", "liga", "cv11";
+  }
+
+  ::selection {
+    background-color: #d97706;
+    color: #faf7f0;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-fraunces), Georgia, serif;
+    letter-spacing: -0.01em;
+  }
+
+  /* Serif numeric metrics */
+  .metric-figure {
+    font-family: var(--font-fraunces), Georgia, serif;
+    font-feature-settings: "tnum", "lnum";
+    font-weight: 400;
+    letter-spacing: -0.02em;
+  }
+
+  /* Uppercase mono labels */
+  .label-mono {
+    font-family: var(--font-plex-mono), ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #6b6358;
+  }
+
+  .hairline {
+    border-color: #e4ddc9;
+  }
+}
+
+@layer components {
+  .card-surface {
+    @apply rounded-lg border border-brand-border bg-brand-card;
+  }
+
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-brand-border bg-brand-card px-2.5 py-1 text-[11px] font-medium text-brand-muted;
+  }
+}
