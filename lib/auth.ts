@@ -9,26 +9,35 @@ export async function getSession(): Promise<SessionContext | null> {
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("*")
     .eq("id", user.id)
     .maybeSingle<Profile>();
+  if (profileError) {
+    console.error("[auth] profiles fetch failed", profileError);
+  }
 
-  const { data: roleRows } = await supabase
+  const { data: roleRows, error: rolesError } = await supabase
     .from("user_roles")
     .select("role")
     .eq("user_id", user.id);
+  if (rolesError) {
+    console.error("[auth] user_roles fetch failed", rolesError);
+  }
 
   const roles: Role[] = (roleRows ?? []).map((r) => r.role as Role);
 
   let organization: Organization | null = null;
   if (profile?.opco_id) {
-    const { data: org } = await supabase
+    const { data: org, error: orgError } = await supabase
       .from("organizations")
       .select("*")
       .eq("id", profile.opco_id)
       .maybeSingle<Organization>();
+    if (orgError) {
+      console.error("[auth] organization fetch failed", orgError);
+    }
     organization = org ?? null;
   }
 

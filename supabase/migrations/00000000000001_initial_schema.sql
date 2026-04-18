@@ -429,13 +429,17 @@ create trigger on_auth_user_created
   for each row execute procedure public.handle_new_user();
 
 -- RLS HELPERS
+-- SECURITY DEFINER so these helpers bypass RLS on the tables they read.
+-- Without it, the helpers re-enter the same RLS policies that invoke them,
+-- and the nested policy evaluation prevents rows from being returned —
+-- users end up appearing as if they have no opco and no roles.
 create or replace function public.current_opco_id()
-returns uuid language sql stable as $$
+returns uuid language sql stable security definer set search_path = public as $$
   select opco_id from profiles where id = auth.uid() limit 1;
 $$;
 
 create or replace function public.has_role(p_role text)
-returns boolean language sql stable as $$
+returns boolean language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from user_roles
     where user_id = auth.uid() and role = p_role
@@ -443,7 +447,7 @@ returns boolean language sql stable as $$
 $$;
 
 create or replace function public.is_super_admin()
-returns boolean language sql stable as $$
+returns boolean language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from user_roles
     where user_id = auth.uid() and role in ('super_admin','executive','corp_dev')
