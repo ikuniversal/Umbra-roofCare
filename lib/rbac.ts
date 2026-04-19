@@ -80,3 +80,82 @@ export function hasRole(userRoles: Role[], role: Role | Role[]): boolean {
   const wanted = Array.isArray(role) ? role : [role];
   return userRoles.some((r) => wanted.includes(r));
 }
+
+// --- Phase 2: Member Lifecycle permissions ---------------------------
+// RLS still enforces tenancy at the DB — these helpers gate UI affordances
+// and mutation paths so we fail fast with clear messages instead of
+// surfacing raw Supabase errors.
+
+const OPCO_MANAGERS: Role[] = [
+  "opco_gm",
+  "sales_manager",
+  "area_manager",
+  "team_lead",
+];
+
+export function canManageMembers(roles: Role[]): boolean {
+  return isPlatformAdmin(roles) || hasRole(roles, OPCO_MANAGERS);
+}
+
+export function canCreateMember(roles: Role[]): boolean {
+  return (
+    canManageMembers(roles) ||
+    roles.includes("cra") ||
+    roles.includes("setter")
+  );
+}
+
+export function canEditMember(
+  roles: Role[],
+  member: { primary_cra_id: string | null; created_by: string | null },
+  userId: string,
+): boolean {
+  if (canManageMembers(roles)) return true;
+  if (roles.includes("cra") && member.primary_cra_id === userId) return true;
+  if (roles.includes("csm") && member.primary_cra_id === userId) return true;
+  return member.created_by === userId;
+}
+
+export function canManageTerritories(roles: Role[]): boolean {
+  return (
+    isPlatformAdmin(roles) ||
+    roles.includes("opco_gm") ||
+    roles.includes("sales_manager")
+  );
+}
+
+export function canWorkLeads(roles: Role[]): boolean {
+  return (
+    canManageMembers(roles) ||
+    roles.includes("setter") ||
+    roles.includes("cra")
+  );
+}
+
+export function canEditLead(
+  roles: Role[],
+  lead: { contacted_by: string | null },
+  userId: string,
+): boolean {
+  if (canManageMembers(roles)) return true;
+  if (!lead.contacted_by) return canWorkLeads(roles);
+  return lead.contacted_by === userId;
+}
+
+export function canBookAppointment(roles: Role[]): boolean {
+  return canManageMembers(roles) ||
+    roles.includes("cra") ||
+    roles.includes("setter") ||
+    roles.includes("csm");
+}
+
+export function canCompleteAppointment(
+  roles: Role[],
+  appointment: { assigned_to: string | null; booked_by: string | null },
+  userId: string,
+): boolean {
+  if (canManageMembers(roles)) return true;
+  return (
+    appointment.assigned_to === userId || appointment.booked_by === userId
+  );
+}

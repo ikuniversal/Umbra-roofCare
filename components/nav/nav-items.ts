@@ -6,6 +6,7 @@ import {
   CalendarDays,
   ClipboardCheck,
   LayoutDashboard,
+  Map,
   MapPinned,
   MessagesSquare,
   Settings,
@@ -65,6 +66,19 @@ export const NAV_SECTIONS: NavSection[] = [
           "team_lead",
           "setter",
           "cra",
+        ],
+      },
+      {
+        label: "Territories",
+        href: "/canvass/territories",
+        icon: Map,
+        phase: 2,
+        roles: [
+          "super_admin",
+          "executive",
+          "corp_dev",
+          "opco_gm",
+          "sales_manager",
         ],
       },
       {
