@@ -1,9 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { AddressResult } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 interface AddressAutocompleteProps {
   id?: string;
@@ -14,12 +14,22 @@ interface AddressAutocompleteProps {
   disabled?: boolean;
 }
 
-// Wrapper around the Google Places Autocomplete widget. If the API key is
-// missing we fall back to a plain text input so forms still work in dev —
-// the parent keeps whatever typed string the user entered. Loading the
-// Google SDK is deferred until mount so this component is SSR-safe.
+// Places API (New) web component. The legacy
+// google.maps.places.Autocomplete widget silently returns zero results
+// on projects where only "Places API (New)" is enabled, and Google now
+// recommends PlaceAutocompleteElement as the forward path. This wrapper:
+//
+//   1. Loads @googlemaps/js-api-loader → importLibrary("places").
+//   2. Instantiates PlaceAutocompleteElement inside a container div.
+//   3. Listens for `gmp-select`, calls place.fetchFields(...), and
+//      hands the parsed AddressResult back to the parent form.
+//   4. Surfaces any load / fetch / gmp-error failure as a visible banner
+//      so misconfigured billing or missing APIs don't fail silently.
+//
+// If the API key is missing or the Places library fails to load, the
+// component degrades to a plain text input so the form still works.
 export function AddressAutocomplete({
-  id,
+  id = "address-autocomplete",
   label = "Address",
   defaultValue = "",
   placeholder = "Start typing an address…",
@@ -27,17 +37,26 @@ export function AddressAutocomplete({
   disabled,
 }: AddressAutocompleteProps) {
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-  const inputRef = React.useRef<HTMLInputElement | null>(null);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const onSelectRef = React.useRef(onSelect);
+
   const [ready, setReady] = React.useState(false);
-  const [degraded, setDegraded] = React.useState(!apiKey);
+  const [error, setError] = React.useState<string | null>(
+    apiKey
+      ? null
+      : "Set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to enable Google Places autocomplete.",
+  );
 
   React.useEffect(() => {
-    if (!apiKey) {
-      setDegraded(true);
-      return;
-    }
+    onSelectRef.current = onSelect;
+  }, [onSelect]);
+
+  React.useEffect(() => {
+    if (!apiKey) return;
+
+    const container = containerRef.current;
     let cancelled = false;
-    let autocomplete: google.maps.places.Autocomplete | null = null;
+    let element: HTMLElement | null = null;
 
     (async () => {
       try {
@@ -48,58 +67,164 @@ export function AddressAutocomplete({
           version: "weekly",
         });
         await loader.importLibrary("places");
-        if (cancelled || !inputRef.current) return;
 
-        autocomplete = new google.maps.places.Autocomplete(inputRef.current, {
-          types: ["address"],
-          componentRestrictions: { country: ["us"] },
-          fields: ["address_components", "formatted_address", "geometry"],
+        if (cancelled || !container) return;
+
+        const places = (google.maps as unknown as {
+          places: Record<string, unknown>;
+        }).places;
+        const PlaceEl = places.PlaceAutocompleteElement as
+          | (new (options?: Record<string, unknown>) => HTMLElement)
+          | undefined;
+
+        if (!PlaceEl) {
+          setError(
+            "Google Maps loaded but did not expose PlaceAutocompleteElement. " +
+              "Enable 'Places API (New)' on the key's Google Cloud project and redeploy.",
+          );
+          return;
+        }
+
+        element = new PlaceEl({
+          includedRegionCodes: ["us"],
+        });
+        element.id = id;
+        element.style.display = "block";
+        element.style.width = "100%";
+
+        container.innerHTML = "";
+        container.appendChild(element);
+
+        if (defaultValue) {
+          try {
+            (element as unknown as { value?: string }).value = defaultValue;
+          } catch {
+            /* some builds don't expose .value; safe to skip */
+          }
+        }
+
+        element.addEventListener("gmp-select", async (rawEvent: Event) => {
+          try {
+            const prediction = (
+              rawEvent as unknown as {
+                placePrediction?: {
+                  toPlace: () => {
+                    fetchFields: (args: { fields: string[] }) => Promise<void>;
+                    addressComponents?: NewAddressComponent[];
+                    formattedAddress?: string;
+                    location?: { lat: () => number; lng: () => number } | null;
+                  };
+                };
+              }
+            ).placePrediction;
+            if (!prediction) return;
+            const place = prediction.toPlace();
+            await place.fetchFields({
+              fields: ["addressComponents", "formattedAddress", "location"],
+            });
+            onSelectRef.current(parsePlace(place));
+            setError(null);
+          } catch (err) {
+            console.error("[address-autocomplete] fetchFields failed", err);
+            setError(
+              err instanceof Error && err.message
+                ? `Failed to fetch place details: ${err.message}`
+                : "Failed to fetch place details. Confirm billing is enabled on the Google Cloud project.",
+            );
+          }
         });
 
-        autocomplete.addListener("place_changed", () => {
-          const place = autocomplete?.getPlace();
-          if (!place?.address_components) return;
-          const parsed = parsePlace(place);
-          if (inputRef.current) {
-            inputRef.current.value = parsed.street;
-          }
-          onSelect(parsed);
+        element.addEventListener("gmp-error", (rawEvent: Event) => {
+          const payload = (rawEvent as unknown as { error?: { message?: string } })
+            .error;
+          console.error("[address-autocomplete] gmp-error", payload);
+          setError(
+            payload?.message
+              ? `Google Places error: ${payload.message}`
+              : "Google Places returned an error. Confirm billing is enabled and both 'Places API' and 'Places API (New)' are turned on.",
+          );
         });
 
         setReady(true);
       } catch (err) {
         console.error("[address-autocomplete] failed to load Google Places", err);
-        setDegraded(true);
+        setError(
+          err instanceof Error && err.message
+            ? `Failed to load Google Places: ${err.message}`
+            : "Failed to load Google Places. Confirm the API key is valid and billing is enabled.",
+        );
       }
     })();
 
     return () => {
       cancelled = true;
-      if (autocomplete) {
-        google.maps.event.clearInstanceListeners(autocomplete);
-      }
+      if (container) container.innerHTML = "";
+      element = null;
     };
-  }, [apiKey, onSelect]);
+  }, [apiKey, defaultValue, id]);
 
   return (
     <div className="space-y-2">
       {label ? <Label htmlFor={id}>{label}</Label> : null}
-      <Input
-        id={id}
-        ref={inputRef}
-        defaultValue={defaultValue}
-        placeholder={placeholder}
-        autoComplete="street-address"
-        disabled={disabled}
-      />
-      {degraded ? (
-        <p className="text-xs text-brand-warn">
-          Address autocomplete unavailable — set{" "}
-          <code className="font-mono">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code>{" "}
-          to enable. You can still type the address manually.
-        </p>
+
+      {apiKey ? (
+        <div
+          ref={containerRef}
+          className={cn(
+            "min-h-[40px]",
+            // The web component renders its own input inside a shadow
+            // DOM, so we only control the outer width and block layout.
+          )}
+          aria-disabled={disabled ? "true" : undefined}
+        />
+      ) : (
+        <input
+          id={id}
+          className="flex h-10 w-full rounded-md border border-brand-border-strong bg-brand-card px-3 py-2 text-sm text-brand-primary placeholder:text-brand-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/30 disabled:cursor-not-allowed disabled:opacity-60"
+          defaultValue={defaultValue}
+          placeholder={placeholder}
+          autoComplete="street-address"
+          onBlur={(e) => {
+            const value = e.currentTarget.value.trim();
+            if (!value) return;
+            onSelectRef.current({
+              street: value,
+              city: "",
+              state: "",
+              zip: "",
+            });
+          }}
+          disabled={disabled}
+        />
+      )}
+
+      {error ? (
+        <div
+          role="alert"
+          className="rounded-md border border-brand-warn/30 bg-brand-warn/5 px-3 py-2 text-xs text-brand-warn"
+        >
+          <p className="font-medium">Address autocomplete unavailable</p>
+          <p className="mt-1 text-brand-muted">{error}</p>
+          {apiKey ? (
+            <ul className="mt-2 list-disc pl-4 text-[11px] text-brand-muted">
+              <li>
+                Enable a billing account on the Google Cloud project — Places API
+                (New) needs one even for free-tier usage.
+              </li>
+              <li>
+                Enable both <span className="font-mono">Places API</span> and{" "}
+                <span className="font-mono">Places API (New)</span>.
+              </li>
+              <li>
+                If the key has HTTP referrer restrictions, include the current
+                Vercel preview + production domains.
+              </li>
+            </ul>
+          ) : null}
+        </div>
       ) : null}
-      {ready ? (
+
+      {ready && !error ? (
         <p className="text-[10px] uppercase tracking-wider text-brand-faint">
           Powered by Google
         </p>
@@ -108,26 +233,39 @@ export function AddressAutocomplete({
   );
 }
 
-function parsePlace(
-  place: google.maps.places.PlaceResult,
-): AddressResult {
-  const components = place.address_components ?? [];
+interface NewAddressComponent {
+  types: string[];
+  longText?: string;
+  shortText?: string;
+}
+
+function parsePlace(place: {
+  addressComponents?: NewAddressComponent[];
+  formattedAddress?: string;
+  location?: { lat: () => number; lng: () => number } | null;
+}): AddressResult {
+  const components = place.addressComponents ?? [];
   const get = (type: string, short = false): string => {
     const c = components.find((x) => x.types.includes(type));
     if (!c) return "";
-    return short ? c.short_name : c.long_name;
+    return short ? c.shortText ?? "" : c.longText ?? "";
   };
 
   const streetNumber = get("street_number");
   const route = get("route");
   const street = [streetNumber, route].filter(Boolean).join(" ").trim();
 
+  const lat =
+    typeof place.location?.lat === "function" ? place.location.lat() : undefined;
+  const lng =
+    typeof place.location?.lng === "function" ? place.location.lng() : undefined;
+
   return {
-    street: street || place.formatted_address || "",
-    city: get("locality") || get("sublocality") || "",
+    street: street || place.formattedAddress || "",
+    city: get("locality") || get("sublocality") || get("postal_town") || "",
     state: get("administrative_area_level_1", true),
     zip: get("postal_code"),
-    lat: place.geometry?.location?.lat(),
-    lng: place.geometry?.location?.lng(),
+    lat,
+    lng,
   };
 }
