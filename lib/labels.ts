@@ -3,13 +3,21 @@ import type {
   AppointmentType,
   CheckpointRating,
   ConditionBand,
+  CrewAvailabilityKind,
+  CrewMemberRole,
   FindingSeverity,
   InspectionStatus,
+  JobPriority,
+  JobStatus,
+  JobType,
   LeadStatus,
   MemberStatus,
   OpportunityPriority,
+  OpportunityStage,
   OpportunityStatus,
   OpportunityType,
+  QuoteLineKind,
+  QuoteStatus,
   RecommendedAction,
   RoofMaterial,
 } from "@/lib/types";
@@ -242,3 +250,123 @@ export const OPPORTUNITY_PRIORITY_VARIANTS: Record<
   high: "warn",
   urgent: "error",
 };
+
+// --- Phase 4: Service Delivery ---------------------------------------
+
+export const OPPORTUNITY_STAGE_LABELS: Record<OpportunityStage, string> = {
+  prospecting: "Prospecting",
+  quoted: "Quoted",
+  scheduled: "Scheduled",
+  in_progress: "In progress",
+  completed: "Completed",
+  lost: "Lost",
+};
+
+export const OPPORTUNITY_STAGE_ORDER: OpportunityStage[] = [
+  "prospecting",
+  "quoted",
+  "scheduled",
+  "in_progress",
+  "completed",
+  "lost",
+];
+
+export const OPPORTUNITY_STAGE_VARIANTS: Record<OpportunityStage, BadgeVariant> =
+  {
+    prospecting: "outline",
+    quoted: "primary",
+    scheduled: "accent",
+    in_progress: "warn",
+    completed: "success",
+    lost: "error",
+  };
+
+export const QUOTE_STATUS_LABELS: Record<QuoteStatus, string> = {
+  draft: "Draft",
+  sent: "Sent",
+  viewed: "Viewed",
+  accepted: "Accepted",
+  rejected: "Rejected",
+  expired: "Expired",
+};
+
+export const QUOTE_STATUS_VARIANTS: Record<QuoteStatus, BadgeVariant> = {
+  draft: "outline",
+  sent: "primary",
+  viewed: "accent",
+  accepted: "success",
+  rejected: "error",
+  expired: "warn",
+};
+
+export const QUOTE_LINE_KIND_LABELS: Record<QuoteLineKind, string> = {
+  material: "Material",
+  labor: "Labor",
+  fee: "Fee",
+  discount: "Discount",
+};
+
+export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
+  ready_to_schedule: "Ready to schedule",
+  scheduled: "Scheduled",
+  in_progress: "In progress",
+  on_hold: "On hold",
+  completed: "Completed",
+  cancelled: "Cancelled",
+};
+
+export const JOB_STATUS_VARIANTS: Record<JobStatus, BadgeVariant> = {
+  ready_to_schedule: "outline",
+  scheduled: "primary",
+  in_progress: "accent",
+  on_hold: "warn",
+  completed: "success",
+  cancelled: "error",
+};
+
+export const JOB_PRIORITY_LABELS: Record<JobPriority, string> = {
+  urgent: "Urgent",
+  high: "High",
+  normal: "Normal",
+  low: "Low",
+};
+
+export const JOB_PRIORITY_VARIANTS: Record<JobPriority, BadgeVariant> = {
+  urgent: "error",
+  high: "warn",
+  normal: "default",
+  low: "outline",
+};
+
+export const JOB_TYPE_LABELS: Record<JobType, string> = {
+  repair: "Repair",
+  replacement: "Replacement",
+  rejuvenation: "Rejuvenation",
+  maintenance: "Maintenance",
+  inspection_followup: "Inspection follow-up",
+};
+
+export const CREW_MEMBER_ROLE_LABELS: Record<CrewMemberRole, string> = {
+  lead: "Lead",
+  tech: "Tech",
+  helper: "Helper",
+};
+
+export const CREW_AVAILABILITY_KIND_LABELS: Record<
+  CrewAvailabilityKind,
+  string
+> = {
+  working_hours: "Working hours",
+  time_off: "Time off",
+  holiday: "Holiday",
+};
+
+export const WEEKDAY_LABELS = [
+  "Sun",
+  "Mon",
+  "Tue",
+  "Wed",
+  "Thu",
+  "Fri",
+  "Sat",
+] as const;

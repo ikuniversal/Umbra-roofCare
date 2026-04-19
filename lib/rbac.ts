@@ -217,3 +217,122 @@ export function canAddInspectionFinding(
 ): boolean {
   return canCaptureInspection(roles, inspection, userId);
 }
+
+// --- Phase 4: Service Delivery permissions ---------------------------
+
+export function canViewOpportunities(roles: Role[]): boolean {
+  if (roles.length === 0) return false;
+  if (roles.length === 1 && roles[0] === "crew_member") return false;
+  return true;
+}
+
+export function canEditOpportunity(
+  roles: Role[],
+  opportunity: { assigned_specialist_id: string | null; assigned_to: string | null },
+  userId: string,
+): boolean {
+  if (isPlatformAdmin(roles)) return true;
+  if (hasRole(roles, OPCO_MANAGERS)) return true;
+  if (roles.includes("cra")) return true;
+  if (
+    roles.includes("specialist") &&
+    (opportunity.assigned_specialist_id === userId ||
+      opportunity.assigned_to === userId)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function canDragOpportunityStage(roles: Role[]): boolean {
+  return (
+    isPlatformAdmin(roles) ||
+    hasRole(roles, OPCO_MANAGERS) ||
+    roles.includes("cra") ||
+    roles.includes("specialist")
+  );
+}
+
+export function canCreateQuote(roles: Role[]): boolean {
+  return (
+    isPlatformAdmin(roles) ||
+    roles.includes("opco_gm") ||
+    roles.includes("sales_manager") ||
+    roles.includes("specialist")
+  );
+}
+
+export function canEditQuote(
+  roles: Role[],
+  quote: { prepared_by: string | null },
+  userId: string,
+): boolean {
+  if (isPlatformAdmin(roles) || roles.includes("opco_gm")) return true;
+  if (roles.includes("sales_manager")) return true;
+  if (canCreateQuote(roles) && quote.prepared_by === userId) return true;
+  return false;
+}
+
+export function canDeleteQuote(roles: Role[]): boolean {
+  return (
+    isPlatformAdmin(roles) ||
+    roles.includes("opco_gm") ||
+    roles.includes("sales_manager")
+  );
+}
+
+export function canAcceptQuote(roles: Role[]): boolean {
+  return (
+    isPlatformAdmin(roles) ||
+    roles.includes("opco_gm") ||
+    roles.includes("sales_manager")
+  );
+}
+
+export function canViewJobs(roles: Role[]): boolean {
+  // Setter is canvass-only.
+  if (roles.length === 1 && roles[0] === "setter") return false;
+  return roles.length > 0;
+}
+
+export function canScheduleJob(roles: Role[]): boolean {
+  return (
+    isPlatformAdmin(roles) ||
+    roles.includes("opco_gm") ||
+    roles.includes("sales_manager") ||
+    roles.includes("area_manager") ||
+    roles.includes("team_lead")
+  );
+}
+
+export function canCompleteJob(
+  roles: Role[],
+  job: { crew_id: string | null },
+  userId: string,
+  assignedCrewMemberIds: string[],
+): boolean {
+  if (
+    isPlatformAdmin(roles) ||
+    roles.includes("opco_gm") ||
+    roles.includes("area_manager") ||
+    roles.includes("team_lead")
+  ) {
+    return true;
+  }
+  if (
+    roles.includes("crew_member") &&
+    job.crew_id &&
+    assignedCrewMemberIds.includes(userId)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function canManageCrews(roles: Role[]): boolean {
+  return (
+    isPlatformAdmin(roles) ||
+    roles.includes("opco_gm") ||
+    roles.includes("area_manager")
+  );
+}

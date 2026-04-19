@@ -338,6 +338,14 @@ export type OpportunityStatus =
 
 export type OpportunityPriority = "low" | "normal" | "high" | "urgent";
 
+export type OpportunityStage =
+  | "prospecting"
+  | "quoted"
+  | "scheduled"
+  | "in_progress"
+  | "completed"
+  | "lost";
+
 export interface Opportunity {
   id: string;
   opco_id: string | null;
@@ -345,15 +353,23 @@ export interface Opportunity {
   inspection_id: string | null;
   type: OpportunityType | null;
   status: OpportunityStatus;
+  stage: OpportunityStage;
+  stage_order: number;
   priority: OpportunityPriority;
   estimated_value_cents: number | null;
+  value_estimate: number | null;
   assigned_specialist_id: string | null;
+  assigned_to: string | null;
+  expected_close_date: string | null;
   notes: string | null;
+  lost_reason: string | null;
   opened_at: string | null;
   contacted_at: string | null;
   quoted_at: string | null;
   closed_at: string | null;
+  won_job_id: string | null;
   created_at: string;
+  updated_at: string | null;
 }
 
 export interface DecisionRuleConditions {
@@ -390,4 +406,140 @@ export interface DecisionRule {
   actions: DecisionRuleActions;
   created_at: string;
   updated_at: string;
+}
+
+// --- Phase 4: Service Delivery ---------------------------------------
+
+export type QuoteStatus =
+  | "draft"
+  | "sent"
+  | "viewed"
+  | "accepted"
+  | "rejected"
+  | "expired";
+
+export type QuoteLineKind = "material" | "labor" | "fee" | "discount";
+
+export interface Quote {
+  id: string;
+  opco_id: string;
+  opportunity_id: string;
+  quote_number: string;
+  status: QuoteStatus;
+  prepared_by: string | null;
+  valid_until: string | null;
+  subtotal_materials: number;
+  subtotal_labor: number;
+  discount_amount: number;
+  tax_rate: number;
+  tax_amount: number;
+  total: number;
+  notes: string | null;
+  terms: string | null;
+  accepted_at: string | null;
+  accepted_by_member: boolean;
+  pdf_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface QuoteLineItem {
+  id: string;
+  quote_id: string;
+  kind: QuoteLineKind;
+  description: string;
+  quantity: number;
+  unit: string | null;
+  unit_price: number;
+  line_total: number;
+  sort_order: number;
+}
+
+export type JobStatus =
+  | "ready_to_schedule"
+  | "scheduled"
+  | "in_progress"
+  | "on_hold"
+  | "completed"
+  | "cancelled";
+
+export type JobPriority = "urgent" | "high" | "normal" | "low";
+
+export type JobType =
+  | "repair"
+  | "replacement"
+  | "rejuvenation"
+  | "maintenance"
+  | "inspection_followup";
+
+export interface Job {
+  id: string;
+  opco_id: string | null;
+  member_id: string | null;
+  property_id: string | null;
+  opportunity_id: string | null;
+  quote_id: string | null;
+  job_type: JobType | null;
+  status: JobStatus;
+  priority: JobPriority;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
+  actual_start: string | null;
+  actual_end: string | null;
+  crew_id: string | null;
+  specialist_id: string | null;
+  project_manager_id: string | null;
+  job_number: string | null;
+  quoted_cents: number | null;
+  final_cents: number | null;
+  warranty_years: number | null;
+  financing_type: string | null;
+  scope_summary: string | null;
+  completion_notes: string | null;
+  completion_photo_urls: string[] | null;
+  member_signature_url: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface Crew {
+  id: string;
+  opco_id: string;
+  name: string;
+  crew_code: string;
+  lead_id: string | null;
+  active: boolean;
+  specialties: string[] | null;
+  max_concurrent_jobs: number;
+  home_base: string | null;
+  notes: string | null;
+  type: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export type CrewMemberRole = "lead" | "tech" | "helper";
+
+export interface CrewMemberRow {
+  id: string;
+  crew_id: string;
+  profile_id: string;
+  role: CrewMemberRole;
+  joined_at: string;
+  left_at: string | null;
+}
+
+export type CrewAvailabilityKind = "working_hours" | "time_off" | "holiday";
+
+export interface CrewAvailability {
+  id: string;
+  crew_id: string;
+  kind: CrewAvailabilityKind;
+  weekday: number | null;
+  start_date: string | null;
+  end_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  notes: string | null;
 }
