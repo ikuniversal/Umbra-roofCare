@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { requireSession } from "@/lib/auth";
 import {
+  canEditDecisionRules,
+  canEditInspectionTemplate,
   canInviteUsers,
   canManageOrganizations,
   canViewSettings,
@@ -16,12 +18,24 @@ export default async function SettingsLayout({
   const showOrgs = canManageOrganizations(session.roles);
   const showUsers = canInviteUsers(session.roles);
   const showTeams = canViewSettings(session.roles);
+  const showTemplate = canEditInspectionTemplate(session.roles);
+  const showRules = canEditDecisionRules(session.roles);
 
   const tabs: { href: string; label: string; show: boolean }[] = [
     { href: "/settings/profile", label: "Profile", show: true },
     { href: "/settings/organizations", label: "Organizations", show: showOrgs },
     { href: "/settings/users", label: "Users", show: showUsers },
     { href: "/settings/teams", label: "Teams", show: showTeams },
+    {
+      href: "/settings/inspection-template",
+      label: "Inspection template",
+      show: showTemplate,
+    },
+    {
+      href: "/settings/decision-engine",
+      label: "Decision engine",
+      show: showRules,
+    },
   ];
 
   return (

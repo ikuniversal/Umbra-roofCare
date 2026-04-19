@@ -159,3 +159,61 @@ export function canCompleteAppointment(
     appointment.assigned_to === userId || appointment.booked_by === userId
   );
 }
+
+// --- Phase 3: Inspection Engine permissions --------------------------
+
+export function canScheduleInspection(roles: Role[]): boolean {
+  return (
+    isPlatformAdmin(roles) ||
+    hasRole(roles, OPCO_MANAGERS) ||
+    roles.includes("cra") ||
+    roles.includes("csm")
+  );
+}
+
+export function canCaptureInspection(
+  roles: Role[],
+  inspection: { inspector_id: string | null; status: string },
+  userId: string,
+): boolean {
+  if (inspection.status === "completed" || inspection.status === "cancelled") {
+    return false;
+  }
+  if (isPlatformAdmin(roles)) return true;
+  if (hasRole(roles, OPCO_MANAGERS)) return true;
+  if (roles.includes("inspector")) {
+    return (
+      inspection.inspector_id === userId || inspection.inspector_id === null
+    );
+  }
+  return false;
+}
+
+export function canEditInspection(
+  roles: Role[],
+  inspection: { inspector_id: string | null; status: string },
+  userId: string,
+): boolean {
+  return canCaptureInspection(roles, inspection, userId);
+}
+
+export function canViewInspectionReport(roles: Role[]): boolean {
+  // Read access: everyone inside the OpCo. RLS enforces tenancy.
+  return roles.length > 0;
+}
+
+export function canEditInspectionTemplate(roles: Role[]): boolean {
+  return isPlatformAdmin(roles) || roles.includes("opco_gm");
+}
+
+export function canEditDecisionRules(roles: Role[]): boolean {
+  return isPlatformAdmin(roles) || roles.includes("opco_gm");
+}
+
+export function canAddInspectionFinding(
+  roles: Role[],
+  inspection: { inspector_id: string | null; status: string },
+  userId: string,
+): boolean {
+  return canCaptureInspection(roles, inspection, userId);
+}

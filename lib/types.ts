@@ -231,3 +231,163 @@ export interface AddressResult {
   lat?: number;
   lng?: number;
 }
+
+// --- Phase 3: Inspection Engine --------------------------------------
+
+export type CheckpointRating = "pass" | "warn" | "fail";
+
+export type FindingSeverity =
+  | "info"
+  | "minor"
+  | "moderate"
+  | "severe"
+  | "critical";
+
+export type ConditionBand = "healthy" | "moderate" | "high_risk" | "critical";
+
+export type RecommendedAction =
+  | "maintain"
+  | "repair"
+  | "rejuvenate"
+  | "replace_plan";
+
+export type InspectionStatus =
+  | "scheduled"
+  | "in_progress"
+  | "completed"
+  | "cancelled"
+  | "needs_review";
+
+export interface TemplateCheckpoint {
+  id: string;
+  label: string;
+  category: string;
+  weight: number;
+  order: number;
+}
+
+export interface InspectionTemplate {
+  id: string;
+  opco_id: string | null;
+  name: string;
+  version: number;
+  active: boolean;
+  checkpoints: TemplateCheckpoint[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CheckpointResult {
+  checkpoint_id: string;
+  rating: CheckpointRating | null;
+  notes: string | null;
+  photo_urls: string[];
+}
+
+export interface Inspection {
+  id: string;
+  opco_id: string | null;
+  property_id: string | null;
+  member_id: string | null;
+  appointment_id: string | null;
+  inspector_id: string | null;
+  template_id: string | null;
+  template_version: number | null;
+  scheduled_for: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  overall_score: number | null;
+  condition_band: ConditionBand | null;
+  recommended_action: RecommendedAction | null;
+  score_breakdown: Record<string, number> | null;
+  photos_manifest: Record<string, unknown> | null;
+  report_pdf_url: string | null;
+  weather_at_inspection: string | null;
+  duration_minutes: number | null;
+  notes: string | null;
+  status: InspectionStatus;
+  checkpoint_results: CheckpointResult[] | null;
+  created_at: string;
+}
+
+export interface InspectionFinding {
+  id: string;
+  inspection_id: string;
+  category: string;
+  severity: FindingSeverity;
+  description: string;
+  location: string | null;
+  photo_urls: string[] | null;
+  estimated_repair_cents: number | null;
+  created_at: string;
+}
+
+export type OpportunityType =
+  | "repair"
+  | "rejuvenation"
+  | "replacement_plan"
+  | "warranty_claim";
+
+export type OpportunityStatus =
+  | "open"
+  | "contacted"
+  | "quoted"
+  | "won"
+  | "lost"
+  | "on_hold";
+
+export type OpportunityPriority = "low" | "normal" | "high" | "urgent";
+
+export interface Opportunity {
+  id: string;
+  opco_id: string | null;
+  member_id: string | null;
+  inspection_id: string | null;
+  type: OpportunityType | null;
+  status: OpportunityStatus;
+  priority: OpportunityPriority;
+  estimated_value_cents: number | null;
+  assigned_specialist_id: string | null;
+  notes: string | null;
+  opened_at: string | null;
+  contacted_at: string | null;
+  quoted_at: string | null;
+  closed_at: string | null;
+  created_at: string;
+}
+
+export interface DecisionRuleConditions {
+  score_lte?: number;
+  score_gte?: number;
+  score_between?: [number, number];
+  has_finding_severity?: FindingSeverity[];
+  has_finding_category?: string;
+  severity_gte?: FindingSeverity;
+  no_finding_severity_above?: FindingSeverity;
+  roof_age_gte?: number;
+}
+
+export interface DecisionRuleAction {
+  type: OpportunityType;
+  priority: OpportunityPriority;
+  notes_template: string;
+}
+
+export interface DecisionRuleActions {
+  create_opportunity?: DecisionRuleAction;
+  create_opportunity_secondary?: DecisionRuleAction;
+  log_only?: boolean;
+}
+
+export interface DecisionRule {
+  id: string;
+  opco_id: string | null;
+  name: string;
+  description: string | null;
+  priority: number;
+  active: boolean;
+  conditions: DecisionRuleConditions;
+  actions: DecisionRuleActions;
+  created_at: string;
+  updated_at: string;
+}

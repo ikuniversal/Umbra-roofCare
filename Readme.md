@@ -2,7 +2,7 @@
 
 Subscription-first residential roofing CRM. A HoldCo platform coordinating regional OpCo subsidiaries (licensed contractors) across 13 user roles — from super admins and executives down to setters, inspectors, specialists, and crew members.
 
-**Status:** Phase 2 — Member Lifecycle. Builds on the Phase 1 foundation with Members, Properties, Territories, Canvass Leads, and Appointments. Later phases add Inspections, Opportunities, Jobs, Commissions, Messaging, and Reports.
+**Status:** Phase 3 — Inspection Engine. Scored 1–100 roof inspections, a configurable 20-point template, a rules-driven Decision Engine, and a React-PDF report rendered on a Supabase Edge Function. Builds on Phase 1 (foundation) and Phase 2 (member lifecycle). Later phases add Opportunities / Jobs UI (4), Commissions (5), Messaging (6), and Reports (7).
 
 ---
 
@@ -137,6 +137,51 @@ After the Phase 1 super admin is working, layer Phase 2 on top:
    - `/appointments` — switch between List and Week views, book from
      `/appointments/new`, and watch activity land on the member card.
 
+### 8. Phase 3 — Inspection Engine
+
+After Phase 2 is verified, layer Phase 3 on top:
+
+1. **Migrate.** In Supabase SQL Editor, run
+   `supabase/migrations/00000000000004_phase3_inspection_storage.sql`.
+   This adds the `inspection_templates` and `decision_engine_rules` tables,
+   the `checkpoint_results`/`template_id` columns on `inspections`, the
+   `create_inspection_opportunity` RPC (SECURITY DEFINER), and creates
+   two private storage buckets — `inspection-photos` and
+   `inspection-reports` — with OpCo-scoped RLS anchored on the leading
+   UUID segment of each object path.
+2. **Seed demo data (optional).** Run `supabase/seed_phase3.sql` to load
+   the 20-point default template, the 6 default Decision Engine rules,
+   and 6 completed inspections (healthy → critical) backfilled onto the
+   first 6 Phase 2 members. The seed replays the Decision Engine
+   in SQL so the opportunities table reflects what the app would have
+   produced. Safe to re-run; idempotent on template/rule names and
+   inspection notes.
+3. **Deploy the edge function.** The PDF renderer runs on Deno:
+   ```bash
+   supabase functions deploy generate-inspection-report \
+     --project-ref <YOUR_PROJECT_REF>
+   ```
+   Or via the dashboard: **Edge Functions → Create function →** paste the
+   contents of `supabase/functions/generate-inspection-report/index.tsx`
+   and `deno.json`. The function uses the default `SUPABASE_URL` and
+   `SUPABASE_SERVICE_ROLE_KEY` secrets — no extra env vars.
+4. **Verify storage buckets.** In the Supabase dashboard **Storage** tab
+   you should see `inspection-photos` and `inspection-reports`, both
+   private.
+5. **Verify on the live app:**
+   - `/inspections` lists the 6 seeded inspections with scores and condition bands.
+   - Open one → detail page renders score gauge, category breakdown, findings, photos, and any Decision Engine opportunities.
+   - `/inspections/queue` shows your assigned work. Assign an inspection to yourself to exercise the capture flow.
+   - `/inspections/new` → pick a member + property + time → **Schedule**.
+   - Open the scheduled inspection → **Start capture** → rate 20 checkpoints (photos optional) → **Complete inspection**. The Decision Engine fires on completion and creates opportunities.
+   - `/settings/inspection-template` — adjust a weight, click **Save OpCo template**; new inspections get the updated template while existing ones keep their original version.
+   - `/settings/decision-engine` — tweak a rule&apos;s JSON conditions, press **Save as OpCo override**.
+   - On a completed inspection, press **Generate report** to trigger the edge function; a downloadable PDF appears under the *Report* tab.
+
+**Storage sizing.** Inspection photos are compressed client-side to ≤500 KB each; average inspection is 20–60 photos → ~15 MB per inspection. Reports are ~250 KB each. The Supabase free tier includes 1 GB — enough for roughly 60 complete inspections before you&apos;ll want to upgrade.
+
+**Offline queue (Phase 8).** The mobile capture flow requires online uploads today. Failed uploads surface a retry button. IndexedDB / service-worker queuing ships in Phase 8.
+
 ---
 
 ## Verifying the foundation
@@ -153,7 +198,13 @@ Once signed in as a super admin:
 - **/canvass/territories** — OpCo GMs define territories by zip-code clusters and see per-territory lead rosters.
 - **/canvass/leads/[id]** — full lead timeline, status control, note trail, and "Convert to member" flow.
 - **/appointments** — dual-mode view (List + Week calendar); filter by type and status; detail view with status transitions.
-- **/inspections, /opportunities, /jobs, /commissions, /messages, /reports** — placeholder pages marked with their target phase.
+- **/inspections** — scored inspection list, filterable by status / range / inspector; click through to the detail view with tabs (Overview · Checkpoints · Findings · Photos · Score · Report · Activity).
+- **/inspections/queue** — inspector&apos;s personal queue: in-progress, today, this week, unassigned.
+- **/inspections/new** — schedule an inspection against a member + property + time.
+- **/inspections/[id]/capture** — mobile-first capture flow: 20-checkpoint progress bar, pass/warn/fail pads, camera uploader, review + complete.
+- **/settings/inspection-template** — edit the 20-point template per OpCo (versioned; existing inspections keep their version).
+- **/settings/decision-engine** — edit or override the JSON conditions and actions the engine evaluates on completion.
+- **/opportunities, /jobs, /commissions, /messages, /reports** — placeholder pages marked with their target phase.
 
 To verify multi-tenant isolation, invite an `opco_gm` in one OpCo, sign in as them, and confirm they only see users attached to their OpCo.
 
@@ -163,26 +214,38 @@ To verify multi-tenant isolation, invite an `opco_gm` in one OpCo, sign in as th
 
 ```
 app/
-  (auth)/login/               public sign-in
-  (app)/                      protected shell (sidebar + topbar)
+  (auth)/login/                  public sign-in
+  (app)/                         protected shell (sidebar + topbar)
     dashboard/
-    members/ canvass/ appointments/ inspections/
+    members/ canvass/ appointments/
+    inspections/                 list, queue, new, detail, capture flow
     opportunities/ jobs/ commissions/ messages/ reports/
     settings/
       profile/ organizations/ users/ teams/
-  api/users/invite/           admin-only invite endpoint
+      inspection-template/       Phase 3 editor
+      decision-engine/           Phase 3 rule editor
+  api/users/invite/              admin-only invite endpoint
 components/
-  ui/                         shadcn-style primitives
-  nav/                        sidebar, topbar, nav-items
-  brand/                      Umbra wordmark and roof mark
+  ui/                            shadcn-style primitives
+  nav/                           sidebar, topbar, nav-items
+  brand/                         Umbra wordmark and roof mark
+  inspections/                   ScoreDisplay, PhotoUploader, FindingsList, PhotoGrid, badges
 lib/
-  supabase/                   browser, server, admin clients + middleware
-  auth.ts                     getSession / requireSession / requireRole
-  rbac.ts                     role definitions and guards
-  types.ts                    shared DB types
+  supabase/                      browser, server, admin clients + middleware
+  auth.ts                        getSession / requireSession / requireRole
+  rbac.ts                        role definitions and guards
+  types.ts                       shared DB types
+  activity.ts                    activity_log writer
+  decision-engine.ts             Phase 3 rule evaluation + opportunity creation
+  inspections/
+    template.ts                  default 20-point template + helpers
+    scoring.ts                   weighted 1-100 scoring + bands/actions
+    actions.ts                   server actions (schedule/rate/photo/finding/complete/replay)
 supabase/
-  migrations/                 initial_schema.sql, phase2_territories_zip.sql
-  seed.sql, seed_phase2.sql
+  migrations/                    initial_schema / rls_helpers / territories_zip / phase3_inspection_storage
+  functions/
+    generate-inspection-report/  Deno edge function rendering the PDF
+  seed.sql, seed_phase2.sql, seed_phase3.sql
 ```
 
 ## Scripts
