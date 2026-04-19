@@ -11,7 +11,6 @@ import type {
   Profile,
 } from "@/lib/types";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AppointmentStatusBadge } from "@/components/status-badges";
 import { ActivityTimeline } from "@/components/activity-timeline";

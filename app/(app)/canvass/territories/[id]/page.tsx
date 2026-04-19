@@ -5,7 +5,7 @@ import { canManageTerritories } from "@/lib/rbac";
 import { createClient } from "@/lib/supabase/server";
 import type { CanvassLead, Territory } from "@/lib/types";
 import { PageHeader } from "@/components/page-header";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { LeadStatusBadge } from "@/components/status-badges";
 import { TerritoryFormDialog } from "../territory-form-dialog";
 import { AddLeadForm } from "./add-lead-form";
