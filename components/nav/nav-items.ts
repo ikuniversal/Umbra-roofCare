@@ -97,7 +97,6 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Inspections",
         href: "/inspections",
         icon: ClipboardCheck,
-        phase: 3,
         roles: "all",
       },
       {

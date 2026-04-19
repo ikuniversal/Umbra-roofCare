@@ -76,10 +76,10 @@ export function Sidebar({ roles, opcoName }: SidebarProps) {
 
       <div className="border-t border-brand-bg/10 px-6 py-4">
         <p className="label-mono !text-brand-bg/50">
-          Phase 2 · Member Lifecycle
+          Phase 3 · Inspection Engine
         </p>
         <p className="mt-1 font-serif text-sm text-brand-bg/80">
-          v0.2 · Pilot
+          v0.3 · Pilot
         </p>
       </div>
     </aside>
