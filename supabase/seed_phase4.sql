@@ -97,7 +97,7 @@ set
     when m.rn = 3 then 2800
     else 4200
   end,
-  expected_close_date = (current_date + (m.rn * 7))::date
+  expected_close_date = (current_date + make_interval(days => (m.rn * 7)::int))::date
 from _phase4_opp_map m
 where m.id = o.id;
 
@@ -133,7 +133,7 @@ select
   public.generate_quote_number(m.opco_id),
   case when m.stage = 'scheduled' then 'accepted' else 'sent' end,
   null,
-  (current_date + 30)::date,
+  (current_date + make_interval(days => 30))::date,
   round(m.total::numeric * 0.55, 2),
   round(m.total::numeric * 0.30, 2),
   0.0825,
