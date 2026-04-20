@@ -2,11 +2,15 @@ import type {
   AppointmentStatus,
   AppointmentType,
   CheckpointRating,
+  CommissionKind,
+  CommissionStatus,
   ConditionBand,
   CrewAvailabilityKind,
   CrewMemberRole,
   FindingSeverity,
   InspectionStatus,
+  InvoiceKind,
+  InvoiceStatus,
   JobPriority,
   JobStatus,
   JobType,
@@ -20,6 +24,8 @@ import type {
   QuoteStatus,
   RecommendedAction,
   RoofMaterial,
+  SubscriptionFrequency,
+  SubscriptionStatus,
 } from "@/lib/types";
 
 export const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
@@ -370,3 +376,85 @@ export const WEEKDAY_LABELS = [
   "Fri",
   "Sat",
 ] as const;
+
+// --- Phase 5: Monetization -------------------------------------------
+
+export const SUBSCRIPTION_FREQUENCY_LABELS: Record<SubscriptionFrequency, string> =
+  {
+    annual: "Annual",
+    monthly: "Monthly",
+    quarterly: "Quarterly",
+  };
+
+export const SUBSCRIPTION_STATUS_LABELS: Record<SubscriptionStatus, string> = {
+  pending: "Pending",
+  active: "Active",
+  past_due: "Past due",
+  paused: "Paused",
+  canceled: "Canceled",
+  ended: "Ended",
+  trialing: "Trialing",
+};
+
+export const SUBSCRIPTION_STATUS_VARIANTS: Record<
+  SubscriptionStatus,
+  BadgeVariant
+> = {
+  pending: "outline",
+  active: "success",
+  past_due: "warn",
+  paused: "accent",
+  canceled: "outline",
+  ended: "default",
+  trialing: "primary",
+};
+
+export const INVOICE_KIND_LABELS: Record<InvoiceKind, string> = {
+  subscription_initial: "Initial",
+  subscription_renewal: "Renewal",
+  subscription_upgrade: "Upgrade",
+  job_invoice: "Job",
+  manual: "Manual",
+};
+
+export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+  draft: "Draft",
+  open: "Open",
+  paid: "Paid",
+  uncollectible: "Uncollectible",
+  void: "Void",
+};
+
+export const INVOICE_STATUS_VARIANTS: Record<InvoiceStatus, BadgeVariant> = {
+  draft: "outline",
+  open: "primary",
+  paid: "success",
+  uncollectible: "error",
+  void: "outline",
+};
+
+export const COMMISSION_KIND_LABELS: Record<CommissionKind, string> = {
+  cra_enrollment: "Enrollment",
+  cra_renewal: "Renewal residual",
+  sales_manager_override: "Team override",
+  specialist_job: "Job commission",
+};
+
+export const COMMISSION_STATUS_LABELS: Record<CommissionStatus, string> = {
+  pending: "Pending",
+  approved: "Approved",
+  paid: "Paid",
+  reversed: "Reversed",
+  forfeited: "Forfeited",
+};
+
+export const COMMISSION_STATUS_VARIANTS: Record<
+  CommissionStatus,
+  BadgeVariant
+> = {
+  pending: "outline",
+  approved: "primary",
+  paid: "success",
+  reversed: "error",
+  forfeited: "warn",
+};

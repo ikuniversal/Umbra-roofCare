@@ -543,3 +543,148 @@ export interface CrewAvailability {
   end_time: string | null;
   notes: string | null;
 }
+
+// --- Phase 5: Monetization -----------------------------------------
+
+export type SubscriptionFrequency = "annual" | "monthly" | "quarterly";
+
+export type SubscriptionStatus =
+  | "pending"
+  | "active"
+  | "past_due"
+  | "paused"
+  | "canceled"
+  | "ended"
+  | "trialing";
+
+export interface SubscriptionPlan {
+  id: string;
+  code: string;
+  name: string;
+  tier_level: number;
+  annual_price_cents: number;
+  monthly_price_cents: number;
+  quarterly_price_cents: number;
+  stripe_product_id: string | null;
+  stripe_price_annual_id: string | null;
+  stripe_price_monthly_id: string | null;
+  stripe_price_quarterly_id: string | null;
+  features: string[];
+  cra_enrollment_commission_cents: number;
+  cra_renewal_residual_pct: number;
+  active: boolean;
+  created_at: string;
+}
+
+export interface Subscription {
+  id: string;
+  opco_id: string;
+  member_id: string;
+  plan_id: string;
+  frequency: SubscriptionFrequency;
+  status: SubscriptionStatus;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  trial_end: string | null;
+  canceled_at: string | null;
+  cancellation_reason: string | null;
+  enrolled_by: string | null;
+  enrolled_at: string;
+  price_at_enrollment_cents: number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type InvoiceKind =
+  | "subscription_initial"
+  | "subscription_renewal"
+  | "subscription_upgrade"
+  | "job_invoice"
+  | "manual";
+
+export type InvoiceStatus =
+  | "draft"
+  | "open"
+  | "paid"
+  | "uncollectible"
+  | "void";
+
+export interface Invoice {
+  id: string;
+  opco_id: string;
+  member_id: string | null;
+  subscription_id: string | null;
+  job_id: string | null;
+  stripe_invoice_id: string | null;
+  kind: InvoiceKind;
+  status: InvoiceStatus;
+  subtotal_cents: number;
+  tax_cents: number;
+  total_cents: number;
+  amount_paid_cents: number;
+  amount_remaining_cents: number;
+  currency: string;
+  issued_at: string | null;
+  paid_at: string | null;
+  due_at: string | null;
+  hosted_invoice_url: string | null;
+  pdf_url: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CommissionKind =
+  | "cra_enrollment"
+  | "cra_renewal"
+  | "sales_manager_override"
+  | "specialist_job";
+
+export type CommissionStatus =
+  | "pending"
+  | "approved"
+  | "paid"
+  | "reversed"
+  | "forfeited";
+
+export type CommissionSourceType = "subscription" | "invoice" | "job";
+
+export interface Commission {
+  id: string;
+  opco_id: string;
+  profile_id: string;
+  kind: CommissionKind;
+  source_type: CommissionSourceType;
+  source_id: string;
+  basis_cents: number;
+  rate: number | null;
+  amount_cents: number;
+  status: CommissionStatus;
+  period_year: number | null;
+  period_month: number | null;
+  earned_at: string;
+  approved_at: string | null;
+  approved_by: string | null;
+  paid_at: string | null;
+  paid_reference: string | null;
+  reversal_reason: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface OpcoStripeAccount {
+  id: string;
+  opco_id: string;
+  stripe_account_id: string | null;
+  account_type: string;
+  charges_enabled: boolean;
+  payouts_enabled: boolean;
+  details_submitted: boolean;
+  onboarding_completed_at: string | null;
+  disabled_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
