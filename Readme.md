@@ -2,7 +2,7 @@
 
 Subscription-first residential roofing CRM. A HoldCo platform coordinating regional OpCo subsidiaries (licensed contractors) across 13 user roles — from super admins and executives down to setters, inspectors, specialists, and crew members.
 
-**Status:** Phase 4 — Service Delivery. Opportunity kanban, structured quote builder with PDF rendering, jobs lifecycle, crew management, and a drag-and-drop crew scheduling calendar. Builds on Phases 1 (foundation), 2 (member lifecycle), 3 (inspection engine). Later phases add Commissions (5), Messaging (6), Reports (7).
+**Status:** Phase 5 — Monetization. Stripe-powered subscriptions (4 tiers × 3 billing frequencies with native proration), Stripe Connect per OpCo for job invoicing, an idempotent webhook pipeline, and a full commission engine (CRA enrollment + renewal residuals, sales-manager monthly overrides, specialist job commissions). Builds on Phases 1–4. Later phases add Messaging (6), Reports (7).
 
 ---
 
@@ -206,6 +206,80 @@ Layer Phase 4 on after Phase 3 is verified:
    - `/schedule` is the operational dashboard: crew rows × day columns for the current week. Drag unscheduled jobs from the sidebar onto a crew-day cell → persisted via `scheduleJob` server action. Prev/next week + reset.
 
 **RBAC reminders.** Inspectors, CRAs, and CSMs can see opportunities but only managers / sales_managers / specialists can quote. Only opco_gm / sales_manager can accept a quote (triggers the opportunity → job RPC). Crew members can only complete jobs they're rostered on.
+
+### 10. Phase 5 — Monetization
+
+Layer Phase 5 on after Phase 4 is verified:
+
+1. **Migrate.** SQL Editor → run
+   `supabase/migrations/00000000000006_phase5_monetization.sql`. It drops
+   the Phase 1 placeholder `subscriptions` and `commissions` tables
+   (which are empty by design — the migration raises if rows exist),
+   recreates them per the Phase 5 spec, and adds `subscription_plans`,
+   `subscription_events`, `invoices`, `opco_stripe_accounts`, plus the
+   SQL helpers `compute_frequency_price`, `create_cra_enrollment_commission`,
+   `create_cra_renewal_residual`, `compute_sales_manager_overrides`, and
+   a `jobs → specialist_job` commission trigger on job completion.
+
+2. **Seed.** Run `supabase/seed_phase5.sql`. Verify counts with:
+
+   ```sql
+   select 'subscription_plans', count(*) from subscription_plans
+   union all select 'subscriptions', count(*) from subscriptions
+   union all select 'invoices', count(*) from invoices
+   union all select 'commissions', count(*) from commissions;
+   ```
+
+   Expect 4 plans, 4 subscriptions, 8 invoices, 7–9 commissions
+   (depending on how many seeded jobs have a completed status + a
+   specialist on file — the seed caps the specialist commissions at 2).
+
+3. **Stripe env vars.** Set in Vercel:
+   - `STRIPE_SECRET_KEY` (test mode `sk_test_…`)
+   - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` (test mode `pk_test_…`)
+   - `STRIPE_WEBHOOK_SECRET` (set after step 5)
+
+4. **Initialize Stripe products.** Log in as super admin →
+   `/settings/stripe` → **Initialize Stripe products**. One Stripe
+   Product per tier + 3 Prices (annual / monthly / quarterly) are
+   created and linked back to `subscription_plans`.
+
+5. **Register the webhook.** Stripe Dashboard → Developers → Webhooks →
+   Add endpoint. URL: `https://umbra-roof-care.vercel.app/api/webhooks/stripe`.
+   Events: `invoice.paid`, `invoice.payment_failed`,
+   `customer.subscription.created|updated|deleted`,
+   `customer.subscription.trial_will_end`, `charge.refunded`,
+   `account.updated`. Copy the signing secret into Vercel as
+   `STRIPE_WEBHOOK_SECRET` and redeploy.
+
+6. **Onboard each OpCo's Connect account.** `/settings/stripe` →
+   under **Connect accounts**, press *Create Connect account* for each
+   OpCo, then *Send onboarding link* so the GM can finish KYC in
+   Stripe's hosted flow. Job invoices route through these accounts.
+
+7. **Verify on the live app:**
+   - `/members/{seeded-member-id}/subscription` — shows the active
+     subscription, next renewal, payment method management, change
+     plan, cancellation flow.
+   - `/invoices` — 8 seeded invoices filterable by status/kind.
+   - `/commissions` — role-aware ledger. OpCo GMs see the full OpCo
+     roster; CRAs only see their own.
+   - `/commissions/review` — approve pending commissions in batch.
+   - `/commissions/payroll` — compute monthly sales-manager overrides
+     via the `compute_sales_manager_overrides` RPC, mark the approved
+     batch paid, export a CSV.
+   - `/settings/subscription-plans` — read-only operator view of the
+     4 tiers and their Stripe linkage.
+
+8. **Test webhook delivery.** Stripe Dashboard → Webhooks → your
+   endpoint → *Send test webhook* → `invoice.paid`. Confirm a row
+   appears in the `subscription_events` table with `processed_at` set.
+
+**What's deliberately stubbed until Phase 6.**
+- No email is sent when a quote/invoice is generated — the Send button
+  only updates status.
+- Trial-end reminders don't fire yet; the webhook handler records the
+  event but doesn't notify.
 
 ---
 

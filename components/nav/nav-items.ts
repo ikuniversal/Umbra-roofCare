@@ -12,6 +12,7 @@ import {
   Map,
   MapPinned,
   MessagesSquare,
+  Receipt,
   Settings,
   Sparkles,
   Users,
@@ -172,10 +173,27 @@ export const NAV_SECTIONS: NavSection[] = [
     heading: "Operations",
     items: [
       {
+        label: "Invoices",
+        href: "/invoices",
+        icon: Receipt,
+        roles: [
+          "super_admin",
+          "executive",
+          "corp_dev",
+          "opco_gm",
+          "sales_manager",
+          "area_manager",
+          "team_lead",
+          "cra",
+          "specialist",
+          "csm",
+          "inspector",
+        ],
+      },
+      {
         label: "Commissions",
         href: "/commissions",
         icon: Banknote,
-        phase: 5,
         roles: [
           "super_admin",
           "executive",

@@ -336,3 +336,92 @@ export function canManageCrews(roles: Role[]): boolean {
     roles.includes("area_manager")
   );
 }
+
+// --- Phase 5: Monetization permissions -------------------------------
+
+export function canEnrollMember(roles: Role[]): boolean {
+  return (
+    isPlatformAdmin(roles) ||
+    hasRole(roles, OPCO_MANAGERS) ||
+    roles.includes("cra") ||
+    roles.includes("setter") ||
+    roles.includes("specialist") ||
+    roles.includes("csm")
+  );
+}
+
+export function canChangeSubscriptionPlan(
+  roles: Role[],
+  subscription: { enrolled_by: string | null },
+  userId: string,
+): boolean {
+  if (isPlatformAdmin(roles)) return true;
+  if (roles.includes("opco_gm") || roles.includes("sales_manager")) return true;
+  return subscription.enrolled_by === userId;
+}
+
+export function canCancelSubscription(
+  roles: Role[],
+  subscription: { enrolled_by: string | null },
+  userId: string,
+): boolean {
+  if (isPlatformAdmin(roles)) return true;
+  if (roles.includes("opco_gm")) return true;
+  return subscription.enrolled_by === userId;
+}
+
+export function canViewInvoices(roles: Role[]): boolean {
+  // Setter is canvass-only; crew_member doesn't see billing.
+  if (roles.length === 0) return false;
+  if (roles.length === 1 && (roles[0] === "setter" || roles[0] === "crew_member")) {
+    return false;
+  }
+  return true;
+}
+
+export function canViewInvoice(
+  roles: Role[],
+  invoice: { member_id: string | null; subscription_id: string | null },
+  userId: string,
+  userEnrolledSubscriptionIds: string[],
+): boolean {
+  if (isPlatformAdmin(roles) || hasRole(roles, OPCO_MANAGERS)) return true;
+  if (
+    invoice.subscription_id &&
+    userEnrolledSubscriptionIds.includes(invoice.subscription_id)
+  ) {
+    return true;
+  }
+  // Members can see their own via the Stripe portal, not here.
+  return false;
+}
+
+export function canViewCommissions(roles: Role[]): boolean {
+  return roles.length > 0;
+}
+
+export function canApproveCommissions(roles: Role[]): boolean {
+  return isPlatformAdmin(roles) || roles.includes("opco_gm");
+}
+
+export function canInitiatePayroll(roles: Role[]): boolean {
+  return isPlatformAdmin(roles) || roles.includes("opco_gm");
+}
+
+export function canManageStripeSettings(roles: Role[]): boolean {
+  return isPlatformAdmin(roles);
+}
+
+export function canManageOpcoStripeAccount(
+  roles: Role[],
+  opcoId: string | null,
+  userOpcoId: string | null,
+): boolean {
+  if (isPlatformAdmin(roles)) return true;
+  if (roles.includes("opco_gm") && opcoId && opcoId === userOpcoId) return true;
+  return false;
+}
+
+export function canManageSubscriptionPlans(roles: Role[]): boolean {
+  return isPlatformAdmin(roles) || roles.includes("opco_gm");
+}

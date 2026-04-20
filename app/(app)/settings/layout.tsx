@@ -5,6 +5,8 @@ import {
   canEditInspectionTemplate,
   canInviteUsers,
   canManageOrganizations,
+  canManageStripeSettings,
+  canManageSubscriptionPlans,
   canViewSettings,
 } from "@/lib/rbac";
 import { PageHeader } from "@/components/page-header";
@@ -20,6 +22,8 @@ export default async function SettingsLayout({
   const showTeams = canViewSettings(session.roles);
   const showTemplate = canEditInspectionTemplate(session.roles);
   const showRules = canEditDecisionRules(session.roles);
+  const showStripe = canManageStripeSettings(session.roles);
+  const showPlans = canManageSubscriptionPlans(session.roles);
 
   const tabs: { href: string; label: string; show: boolean }[] = [
     { href: "/settings/profile", label: "Profile", show: true },
@@ -36,6 +40,12 @@ export default async function SettingsLayout({
       label: "Decision engine",
       show: showRules,
     },
+    {
+      href: "/settings/subscription-plans",
+      label: "Plans",
+      show: showPlans,
+    },
+    { href: "/settings/stripe", label: "Stripe", show: showStripe },
   ];
 
   return (
