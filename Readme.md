@@ -2,7 +2,7 @@
 
 Subscription-first residential roofing CRM. A HoldCo platform coordinating regional OpCo subsidiaries (licensed contractors) across 13 user roles — from super admins and executives down to setters, inspectors, specialists, and crew members.
 
-**Status:** Phase 3 — Inspection Engine. Scored 1–100 roof inspections, a configurable 20-point template, a rules-driven Decision Engine, and a React-PDF report rendered on a Supabase Edge Function. Builds on Phase 1 (foundation) and Phase 2 (member lifecycle). Later phases add Opportunities / Jobs UI (4), Commissions (5), Messaging (6), and Reports (7).
+**Status:** Phase 4 — Service Delivery. Opportunity kanban, structured quote builder with PDF rendering, jobs lifecycle, crew management, and a drag-and-drop crew scheduling calendar. Builds on Phases 1 (foundation), 2 (member lifecycle), 3 (inspection engine). Later phases add Commissions (5), Messaging (6), Reports (7).
 
 ---
 
@@ -181,6 +181,31 @@ After Phase 2 is verified, layer Phase 3 on top:
 **Storage sizing.** Inspection photos are compressed client-side to ≤500 KB each; average inspection is 20–60 photos → ~15 MB per inspection. Reports are ~250 KB each. The Supabase free tier includes 1 GB — enough for roughly 60 complete inspections before you&apos;ll want to upgrade.
 
 **Offline queue (Phase 8).** The mobile capture flow requires online uploads today. Failed uploads surface a retry button. IndexedDB / service-worker queuing ships in Phase 8.
+
+### 9. Phase 4 — Service Delivery
+
+Layer Phase 4 on after Phase 3 is verified:
+
+1. **Migrate.** Run `supabase/migrations/00000000000005_phase4_service_delivery.sql` in the Supabase SQL Editor. It ALTERs the Phase 1 `opportunities`, `jobs`, and `crews` placeholders, adds `quotes` / `quote_line_items` / `crew_members` / `crew_availability`, and installs four SQL helpers: `generate_quote_number`, `recalculate_quote_totals` (trigger-driven), `accept_quote`, and an updated `create_inspection_opportunity`.
+2. **Seed.** Run `supabase/seed_phase4.sql`. Creates 6 crews (3 per pilot OpCo) with M-F + Sat working hours, backfills the 5 Phase 3 opportunities across pipeline stages, inserts 3 quotes with line items, and 12 jobs spanning every status. Idempotent.
+3. **Deploy the quote PDF edge function:**
+
+   ```bash
+   supabase functions deploy generate-quote-pdf --project-ref <PROJECT_REF>
+   ```
+
+   Or paste `supabase/functions/generate-quote-pdf/index.tsx` and `deno.json` into the dashboard's edge function editor. Reuses the `inspection-reports` bucket.
+4. **Verify on the live app:**
+   - `/opportunities` renders the kanban with cards across prospecting / quoted / scheduled. Drag a card between columns — it persists on refresh.
+   - Drill into an opportunity → **New quote** → fills the line-item editor. Edit a row, click **Update**; totals recompute from the trigger.
+   - On a sent quote, **Accept quote** calls the `accept_quote` RPC, creates a job (routes you to `/jobs/[id]`), and advances the opportunity to `scheduled`.
+   - `/quotes` lists every quote with status filters.
+   - `/jobs` shows 12 jobs; open one → tabs for Overview · Scope · Schedule · Photos · Completion · Activity.
+   - `/jobs/[id]/complete` is the mobile-first completion flow — camera + notes + canvas signature. Signature uploads into the `inspection-photos` bucket.
+   - `/crews` lists 6 crews. Each detail page edits members + weekly availability + time off.
+   - `/schedule` is the operational dashboard: crew rows × day columns for the current week. Drag unscheduled jobs from the sidebar onto a crew-day cell → persisted via `scheduleJob` server action. Prev/next week + reset.
+
+**RBAC reminders.** Inspectors, CRAs, and CSMs can see opportunities but only managers / sales_managers / specialists can quote. Only opco_gm / sales_manager can accept a quote (triggers the opportunity → job RPC). Crew members can only complete jobs they're rostered on.
 
 ---
 
