@@ -78,10 +78,14 @@ where not exists (
 
 create temporary table _phase5_sub_map on commit drop as
 with numbered as (
+  -- Global row_number (no opco partition) — each spec suffix maps to
+  -- exactly ONE member, otherwise multiple OpCos would each try to
+  -- insert the same `sub_DEMO_NNN` placeholder and collide on the
+  -- stripe_subscription_id unique constraint.
   select
     m.id as member_id,
     m.opco_id,
-    row_number() over (partition by m.opco_id order by m.created_at asc, m.id asc) as rn
+    row_number() over (order by m.opco_id asc, m.created_at asc, m.id asc) as rn
   from members m
 )
 select
@@ -298,6 +302,19 @@ where i.kind = 'subscription_renewal'
 
 -- 5c. Sales manager override: pick one sales_manager user (any opco) and
 -- synthesize a monthly override record for last month.
+-- Idempotent via an explicit NOT EXISTS on (kind, profile_id, period).
+-- `on conflict do nothing` without a target is a no-op here because the
+-- commissions PK is a random uuid — it never collides.
+with override_target as (
+  select
+    ur.opco_id,
+    ur.user_id as profile_id,
+    extract(year from (now() - make_interval(months => 1)))::int as period_year,
+    extract(month from (now() - make_interval(months => 1)))::int as period_month
+  from user_roles ur
+  where ur.role = 'sales_manager'
+  limit 1
+)
 insert into commissions (
   opco_id, profile_id, kind, source_type, source_id,
   basis_cents, rate, amount_cents, status,
@@ -305,23 +322,27 @@ insert into commissions (
   notes
 )
 select
-  ur.opco_id,
-  ur.user_id,
+  t.opco_id,
+  t.profile_id,
   'sales_manager_override',
   'invoice',
-  ur.opco_id,
+  t.opco_id,
   150000,
   0.0200,
   3000,
   'pending',
-  extract(year from (now() - make_interval(months => 1)))::int,
-  extract(month from (now() - make_interval(months => 1)))::int,
+  t.period_year,
+  t.period_month,
   (now() - make_interval(days => 15))::timestamptz,
   'Seeded monthly override · run compute_sales_manager_overrides() in prod'
-from user_roles ur
-where ur.role = 'sales_manager'
-limit 1
-on conflict do nothing;
+from override_target t
+where not exists (
+  select 1 from commissions c
+  where c.kind = 'sales_manager_override'
+    and c.profile_id = t.profile_id
+    and c.period_year = t.period_year
+    and c.period_month = t.period_month
+);
 
 -- 5d. Specialist job commission for up to 2 completed seeded jobs.
 insert into commissions (
@@ -363,7 +384,8 @@ where j.status = 'completed'
 limit 2;
 
 -- 5e. Mark the earliest cra_enrollment commission as 'paid' so the UI
--- can show the paid-state row. Only do this once.
+-- can show the paid-state row. Idempotent: only runs if no cra_enrollment
+-- has already been marked paid by a prior seed run.
 update commissions
 set status = 'paid',
     approved_at = (now() - make_interval(days => 20))::timestamptz,
@@ -375,6 +397,10 @@ where id in (
     and status = 'pending'
   order by earned_at asc
   limit 1
+)
+and not exists (
+  select 1 from commissions
+  where kind = 'cra_enrollment' and status = 'paid'
 );
 
 -- ---------------------------------------------------------------
