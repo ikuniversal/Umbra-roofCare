@@ -3,6 +3,7 @@ import { requireSession } from "@/lib/auth";
 import { canManageStripeSettings } from "@/lib/rbac";
 import { createClient } from "@/lib/supabase/server";
 import { stripeIsConfigured } from "@/lib/stripe/client";
+import { getSiteUrl } from "@/lib/site-url";
 import type { Organization, OpcoStripeAccount, SubscriptionPlan } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -35,8 +36,7 @@ export default async function StripeSettingsPage() {
     accounts.map((a) => [a.opco_id, a]),
   );
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-  const webhookUrl = appUrl ? `${appUrl}/api/webhooks/stripe` : "/api/webhooks/stripe";
+  const webhookUrl = `${getSiteUrl()}/api/webhooks/stripe`;
 
   return (
     <div className="space-y-6">

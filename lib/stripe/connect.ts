@@ -1,11 +1,12 @@
 import { getStripe, stripeIsConfigured } from "./client";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getSiteUrl } from "@/lib/site-url";
 import type { Organization, OpcoStripeAccount } from "@/lib/types";
 
 const DEFAULT_REFRESH_URL = (opcoId: string) =>
-  `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/settings/stripe?refresh=${opcoId}`;
+  `${getSiteUrl()}/settings/stripe?refresh=${opcoId}`;
 const DEFAULT_RETURN_URL = (opcoId: string) =>
-  `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/settings/stripe?return=${opcoId}`;
+  `${getSiteUrl()}/settings/stripe?return=${opcoId}`;
 
 export async function createOpcoConnectAccount(opcoId: string): Promise<string> {
   if (!stripeIsConfigured()) {
