@@ -1,11 +1,42 @@
 import type Stripe from "stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { SubscriptionStatus } from "@/lib/types";
+import type {
+  InvoiceKind,
+  InvoiceStatus,
+  SubscriptionFrequency,
+  SubscriptionStatus,
+} from "@/lib/types";
 
-// Event handler router. Each branch must be idempotent — the outer
-// route handler records the raw event via stripe_event_id unique index,
-// so even if a handler retries, the DB-level dedupe prevents
-// double-booking.
+// Webhook event router. Two idempotency guarantees:
+//   * Outer route handler inserts the raw event under a unique
+//     stripe_event_id index, so duplicate deliveries short-circuit
+//     before the dispatcher runs.
+//   * Every branch here is safe to run multiple times: subscription +
+//     invoice upserts look up the row by Stripe ID first, update if
+//     present, insert otherwise. The commission RPCs have their own
+//     source_id guards.
+//
+// Stripe delivery ordering is NOT guaranteed. Most notably, invoice.*
+// events frequently arrive before customer.subscription.created. Both
+// the subscription and invoice handlers below therefore tolerate
+// out-of-order delivery — the invoice handler creates a skeleton
+// subscription row when needed, derived from the invoice's customer +
+// line item, and the later subscription event updates that skeleton
+// with the full metadata.
+
+type StripeSubscriptionLoose = Stripe.Subscription & {
+  current_period_start?: number | null;
+  current_period_end?: number | null;
+};
+type StripeInvoiceLoose = Stripe.Invoice & {
+  subscription?: string | { id: string } | null;
+  tax?: number | null;
+};
+type StripeChargeLoose = Stripe.Charge & {
+  invoice?: string | { id: string } | null;
+};
+
+type SupabaseAdmin = ReturnType<typeof createAdminClient>;
 
 export async function handleStripeEvent(event: Stripe.Event): Promise<void> {
   switch (event.type) {
@@ -16,11 +47,12 @@ export async function handleStripeEvent(event: Stripe.Event): Promise<void> {
     case "customer.subscription.deleted":
       await markSubscriptionCanceled(event);
       break;
+    case "invoice.created":
+    case "invoice.finalized":
     case "invoice.paid":
-      await recordInvoicePayment(event, true);
-      break;
     case "invoice.payment_failed":
-      await recordInvoicePayment(event, false);
+    case "invoice.voided":
+      await upsertInvoice(event);
       break;
     case "charge.refunded":
       await reverseCommissionsForCharge(event);
@@ -29,13 +61,16 @@ export async function handleStripeEvent(event: Stripe.Event): Promise<void> {
       await syncConnectAccount(event);
       break;
     default:
-      // No-op — logged upstream.
+      console.log(`[stripe-webhook] ${event.id} ${event.type} skipped (no handler)`);
       break;
   }
 }
 
-// Maps Stripe's subscription statuses onto our narrower set.
-function mapStatus(stripeStatus: string): SubscriptionStatus {
+// ---------------------------------------------------------------
+// Subscriptions
+// ---------------------------------------------------------------
+
+function mapSubscriptionStatus(stripeStatus: string): SubscriptionStatus {
   switch (stripeStatus) {
     case "active":
     case "trialing":
@@ -53,202 +88,359 @@ function mapStatus(stripeStatus: string): SubscriptionStatus {
   }
 }
 
-// The Stripe SDK has tightened a handful of types in recent versions
-// (current_period_start now lives per-item, Invoice.subscription/tax and
-// Charge.invoice are deprecated). We widen the event payload shapes here
-// so the webhook handler compiles across SDK versions while still
-// reading the fields that Stripe sends on the wire.
-type StripeSubscriptionLoose = Stripe.Subscription & {
-  current_period_start?: number | null;
-  current_period_end?: number | null;
-};
-type StripeInvoiceLoose = Stripe.Invoice & {
-  subscription?: string | { id: string } | null;
-  tax?: number | null;
-};
-type StripeChargeLoose = Stripe.Charge & {
-  invoice?: string | { id: string } | null;
-};
-
 async function upsertSubscription(event: Stripe.Event): Promise<void> {
   const sub = event.data.object as StripeSubscriptionLoose;
   const admin = createAdminClient();
+  console.log(`[stripe-webhook] ${event.id} ${event.type} start sub=${sub.id}`);
 
   const memberId = sub.metadata?.member_id ?? null;
   const planId = sub.metadata?.plan_id ?? null;
-  const frequency = (sub.metadata?.frequency ?? "annual") as
-    | "annual"
-    | "monthly"
-    | "quarterly";
+  const frequency = ((sub.metadata?.frequency ?? "annual") as SubscriptionFrequency);
   const enrolledBy = sub.metadata?.enrolled_by || null;
-
-  if (!memberId || !planId) {
-    // Not an Umbra-managed subscription; skip.
-    return;
-  }
 
   const { data: existing } = await admin
     .from("subscriptions")
-    .select("id, opco_id, plan_id")
+    .select("id, opco_id, plan_id, member_id")
     .eq("stripe_subscription_id", sub.id)
     .maybeSingle();
 
-  // Get member + plan for context; rely on service-role to bypass RLS.
-  const { data: member } = await admin
-    .from("members")
-    .select("opco_id")
-    .eq("id", memberId)
-    .maybeSingle<{ opco_id: string | null }>();
-  const { data: plan } = await admin
-    .from("subscription_plans")
-    .select("annual_price_cents, monthly_price_cents, quarterly_price_cents")
-    .eq("id", planId)
-    .maybeSingle<{
-      annual_price_cents: number;
-      monthly_price_cents: number;
-      quarterly_price_cents: number;
-    }>();
+  // Resolve opco_id from either the existing row, the member (via
+  // metadata), or the Stripe customer as a last resort.
+  let opcoId: string | null = existing?.opco_id ?? null;
+  let resolvedMemberId: string | null = existing?.member_id ?? memberId;
 
-  const priceAtEnrollment =
-    plan
-      ? frequency === "annual"
-        ? plan.annual_price_cents
-        : frequency === "monthly"
-          ? plan.monthly_price_cents
-          : plan.quarterly_price_cents
-      : 0;
+  if (!opcoId && memberId) {
+    const { data: member } = await admin
+      .from("members")
+      .select("opco_id")
+      .eq("id", memberId)
+      .maybeSingle<{ opco_id: string | null }>();
+    opcoId = member?.opco_id ?? null;
+  }
+  if (!opcoId) {
+    const customerId = stripeIdFromRef(sub.customer);
+    if (customerId) {
+      const { data: member } = await admin
+        .from("members")
+        .select("id, opco_id")
+        .eq("stripe_customer_id", customerId)
+        .maybeSingle<{ id: string; opco_id: string | null }>();
+      opcoId = member?.opco_id ?? null;
+      resolvedMemberId = resolvedMemberId ?? member?.id ?? null;
+    }
+  }
 
-  const row = {
-    opco_id: member?.opco_id ?? existing?.opco_id,
-    member_id: memberId,
-    plan_id: planId,
-    frequency,
-    status: mapStatus(sub.status),
-    stripe_customer_id:
-      typeof sub.customer === "string" ? sub.customer : sub.customer?.id ?? null,
+  if (!opcoId || !resolvedMemberId) {
+    console.log(
+      `[stripe-webhook] ${event.id} ${event.type} skip — could not resolve opco/member for sub=${sub.id}`,
+    );
+    return;
+  }
+
+  // Plan lookup: prefer metadata, fall back to invoice-derived match on
+  // the sub's first item price.
+  let resolvedPlanId: string | null = existing?.plan_id ?? planId;
+  let resolvedFrequency: SubscriptionFrequency = frequency;
+  let priceAtEnrollmentCents = 0;
+
+  if (resolvedPlanId) {
+    const { data: plan } = await admin
+      .from("subscription_plans")
+      .select(
+        "annual_price_cents, monthly_price_cents, quarterly_price_cents",
+      )
+      .eq("id", resolvedPlanId)
+      .maybeSingle<{
+        annual_price_cents: number;
+        monthly_price_cents: number;
+        quarterly_price_cents: number;
+      }>();
+    if (plan) {
+      priceAtEnrollmentCents = pickFrequencyCents(plan, resolvedFrequency);
+    }
+  } else {
+    const firstItem = sub.items?.data?.[0];
+    const priceId = firstItem?.price?.id ?? null;
+    const derived = priceId
+      ? await planByStripePriceId(admin, priceId)
+      : null;
+    if (derived) {
+      resolvedPlanId = derived.plan_id;
+      resolvedFrequency = derived.frequency;
+      priceAtEnrollmentCents = derived.price_cents;
+    }
+  }
+
+  if (!resolvedPlanId) {
+    console.log(
+      `[stripe-webhook] ${event.id} ${event.type} skip — no plan resolvable for sub=${sub.id}`,
+    );
+    return;
+  }
+
+  const baseRow = {
+    opco_id: opcoId,
+    member_id: resolvedMemberId,
+    plan_id: resolvedPlanId,
+    frequency: resolvedFrequency,
+    status: mapSubscriptionStatus(sub.status),
+    stripe_customer_id: stripeIdFromRef(sub.customer),
     stripe_subscription_id: sub.id,
-    current_period_start: sub.current_period_start
-      ? new Date(sub.current_period_start * 1000).toISOString()
-      : null,
-    current_period_end: sub.current_period_end
-      ? new Date(sub.current_period_end * 1000).toISOString()
-      : null,
-    trial_end: sub.trial_end
-      ? new Date(sub.trial_end * 1000).toISOString()
-      : null,
-    canceled_at: sub.canceled_at
-      ? new Date(sub.canceled_at * 1000).toISOString()
-      : null,
+    current_period_start: tsFromEpoch(sub.current_period_start),
+    current_period_end: tsFromEpoch(sub.current_period_end),
+    trial_end: tsFromEpoch(sub.trial_end),
+    canceled_at: tsFromEpoch(sub.canceled_at),
     enrolled_by: enrolledBy,
-    price_at_enrollment_cents: priceAtEnrollment,
+    price_at_enrollment_cents: priceAtEnrollmentCents,
   };
 
   let subscriptionRowId = existing?.id;
+  let resolution: "updated" | "inserted";
 
   if (existing) {
-    await admin
-      .from("subscriptions")
-      .update(row)
-      .eq("id", existing.id);
+    await admin.from("subscriptions").update(baseRow).eq("id", existing.id);
+    resolution = "updated";
   } else {
-    if (!row.opco_id) return;
-    const { data: inserted } = await admin
+    const { data: inserted, error } = await admin
       .from("subscriptions")
-      .insert({ ...row, enrolled_at: new Date().toISOString() })
+      .insert({ ...baseRow, enrolled_at: new Date().toISOString() })
       .select("id")
       .maybeSingle<{ id: string }>();
-    subscriptionRowId = inserted?.id;
+    if (error || !inserted) {
+      console.error(
+        `[stripe-webhook] ${event.id} ${event.type} insert failed`,
+        error,
+      );
+      return;
+    }
+    subscriptionRowId = inserted.id;
+    resolution = "inserted";
   }
 
-  // Fire enrollment commission for newly-created records only.
+  // Fire enrollment commission on first-create regardless of whether
+  // the skeleton row was built by an earlier invoice event. The RPC
+  // itself is idempotent on (kind, source_type, source_id).
   if (event.type === "customer.subscription.created" && subscriptionRowId) {
     await admin.rpc("create_cra_enrollment_commission", {
       p_subscription_id: subscriptionRowId,
     });
   }
+
+  console.log(
+    `[stripe-webhook] ${event.id} ${event.type} done sub=${sub.id} row=${subscriptionRowId} ${resolution}`,
+  );
 }
 
 async function markSubscriptionCanceled(event: Stripe.Event): Promise<void> {
   const sub = event.data.object as StripeSubscriptionLoose;
   const admin = createAdminClient();
-  await admin
+  console.log(
+    `[stripe-webhook] ${event.id} ${event.type} start sub=${sub.id}`,
+  );
+  const { data, error } = await admin
     .from("subscriptions")
     .update({
       status: "canceled",
       canceled_at: new Date().toISOString(),
     })
-    .eq("stripe_subscription_id", sub.id);
+    .eq("stripe_subscription_id", sub.id)
+    .select("id");
+  const count = (data ?? []).length;
+  console.log(
+    `[stripe-webhook] ${event.id} ${event.type} done sub=${sub.id} rows_updated=${count}${error ? ` error=${error.message}` : ""}`,
+  );
 }
 
-async function recordInvoicePayment(
-  event: Stripe.Event,
-  succeeded: boolean,
-): Promise<void> {
+// ---------------------------------------------------------------
+// Invoices
+// ---------------------------------------------------------------
+
+interface ResolvedSub {
+  id: string;
+  opco_id: string;
+  member_id: string;
+}
+
+async function resolveSubscriptionRowForInvoice(
+  admin: SupabaseAdmin,
+  inv: StripeInvoiceLoose,
+  eventId: string,
+): Promise<ResolvedSub | null> {
+  const stripeSubId = stripeIdFromRef(inv.subscription);
+  if (!stripeSubId) return null;
+
+  // 1. Already present?
+  const { data: existing } = await admin
+    .from("subscriptions")
+    .select("id, opco_id, member_id")
+    .eq("stripe_subscription_id", stripeSubId)
+    .maybeSingle<ResolvedSub>();
+  if (existing) {
+    return existing;
+  }
+
+  // 2. Stripe delivered the invoice before the subscription event.
+  //    Derive the member from the Stripe customer, and the plan from
+  //    the invoice's first line item price.
+  const customerId = stripeIdFromRef(inv.customer);
+  if (!customerId) {
+    console.log(
+      `[stripe-webhook] ${eventId} skeleton skip — no customer on inv=${inv.id}`,
+    );
+    return null;
+  }
+
+  const { data: member } = await admin
+    .from("members")
+    .select("id, opco_id")
+    .eq("stripe_customer_id", customerId)
+    .maybeSingle<{ id: string; opco_id: string | null }>();
+  if (!member?.opco_id) {
+    console.log(
+      `[stripe-webhook] ${eventId} skeleton skip — no member for customer=${customerId}`,
+    );
+    return null;
+  }
+
+  const firstLine = inv.lines?.data?.[0];
+  // `price` was a top-level field on invoice line items in older Stripe
+  // API versions; recent versions move it under `pricing.price_details`.
+  // We read both so the handler works across SDK upgrades.
+  const priceId = firstLine
+    ? ((firstLine as unknown as {
+        price?: { id?: string };
+        pricing?: { price_details?: { price?: string } };
+      }).price?.id ??
+        (firstLine as unknown as {
+          pricing?: { price_details?: { price?: string } };
+        }).pricing?.price_details?.price ??
+        null)
+    : null;
+  if (!priceId) {
+    console.log(
+      `[stripe-webhook] ${eventId} skeleton skip — no price on inv=${inv.id}`,
+    );
+    return null;
+  }
+
+  const derived = await planByStripePriceId(admin, priceId);
+  if (!derived) {
+    console.log(
+      `[stripe-webhook] ${eventId} skeleton skip — unknown price ${priceId}`,
+    );
+    return null;
+  }
+
+  const { data: inserted, error } = await admin
+    .from("subscriptions")
+    .insert({
+      opco_id: member.opco_id,
+      member_id: member.id,
+      plan_id: derived.plan_id,
+      frequency: derived.frequency,
+      status: "pending",
+      stripe_customer_id: customerId,
+      stripe_subscription_id: stripeSubId,
+      price_at_enrollment_cents: derived.price_cents,
+      enrolled_at: new Date().toISOString(),
+      notes:
+        "Skeleton created from invoice webhook (out-of-order delivery). Filled in when customer.subscription.created arrives.",
+    })
+    .select("id, opco_id, member_id")
+    .maybeSingle<ResolvedSub>();
+
+  if (error || !inserted) {
+    console.error(
+      `[stripe-webhook] ${eventId} skeleton insert failed`,
+      error,
+    );
+    return null;
+  }
+
+  console.log(
+    `[stripe-webhook] ${eventId} skeleton subscription created row=${inserted.id} sub=${stripeSubId}`,
+  );
+  return inserted;
+}
+
+function invoiceKindFromBillingReason(
+  reason: string | null | undefined,
+  hasSubscription: boolean,
+): InvoiceKind {
+  if (!hasSubscription) return "manual";
+  switch (reason) {
+    case "subscription_create":
+      return "subscription_initial";
+    case "subscription_cycle":
+      return "subscription_renewal";
+    case "subscription_update":
+      return "subscription_upgrade";
+    default:
+      return "subscription_renewal";
+  }
+}
+
+function invoiceStatusFromEvent(
+  eventType: string,
+  inv: StripeInvoiceLoose,
+): InvoiceStatus {
+  if (eventType === "invoice.paid") return "paid";
+  if (eventType === "invoice.voided") return "void";
+  if (eventType === "invoice.payment_failed") {
+    return inv.status === "uncollectible" ? "uncollectible" : "open";
+  }
+  if (eventType === "invoice.finalized") return "open";
+  // invoice.created (or anything else) — trust the invoice's own status.
+  const s = inv.status;
+  if (s === "paid") return "paid";
+  if (s === "void") return "void";
+  if (s === "uncollectible") return "uncollectible";
+  if (s === "open") return "open";
+  return "draft";
+}
+
+async function upsertInvoice(event: Stripe.Event): Promise<void> {
   const inv = event.data.object as StripeInvoiceLoose;
   const admin = createAdminClient();
+  console.log(
+    `[stripe-webhook] ${event.id} ${event.type} start inv=${inv.id}`,
+  );
 
-  // Upsert the invoice row.
-  const status = succeeded
-    ? "paid"
-    : inv.status === "uncollectible"
-      ? "uncollectible"
-      : "open";
+  const subRow = await resolveSubscriptionRowForInvoice(admin, inv, event.id);
+  const opcoId = subRow?.opco_id ?? (await opcoIdFromCustomer(admin, inv));
+  if (!opcoId) {
+    console.log(
+      `[stripe-webhook] ${event.id} ${event.type} skip inv=${inv.id} — no opco resolvable`,
+    );
+    return;
+  }
 
-  const isSubscriptionInvoice = Boolean(inv.subscription);
-  const kind = isSubscriptionInvoice
-    ? (inv.billing_reason === "subscription_create"
-        ? "subscription_initial"
-        : inv.billing_reason === "subscription_cycle"
-          ? "subscription_renewal"
-          : inv.billing_reason === "subscription_update"
-            ? "subscription_upgrade"
-            : "subscription_renewal")
-    : "manual";
-
-  const { data: subRow } = inv.subscription
-    ? await admin
-        .from("subscriptions")
-        .select("id, opco_id, member_id")
-        .eq(
-          "stripe_subscription_id",
-          typeof inv.subscription === "string"
-            ? inv.subscription
-            : inv.subscription.id,
-        )
-        .maybeSingle<{
-          id: string;
-          opco_id: string;
-          member_id: string;
-        }>()
-    : { data: null };
+  const status = invoiceStatusFromEvent(event.type, inv);
+  const hasSubscription = Boolean(inv.subscription);
+  const kind = invoiceKindFromBillingReason(inv.billing_reason, hasSubscription);
 
   const row = {
-    opco_id: subRow?.opco_id,
-    member_id: subRow?.member_id ?? null,
+    opco_id: opcoId,
+    member_id: subRow?.member_id ?? (await memberIdFromCustomer(admin, inv)),
     subscription_id: subRow?.id ?? null,
     stripe_invoice_id: inv.id,
     kind,
-    status: status as "paid" | "open" | "uncollectible",
+    status,
     subtotal_cents: inv.subtotal ?? 0,
     tax_cents: inv.tax ?? 0,
     total_cents: inv.total ?? 0,
     amount_paid_cents: inv.amount_paid ?? 0,
     amount_remaining_cents: inv.amount_remaining ?? 0,
     currency: inv.currency ?? "usd",
-    issued_at: inv.created
-      ? new Date(inv.created * 1000).toISOString()
-      : null,
-    paid_at: succeeded && inv.status_transitions?.paid_at
-      ? new Date(inv.status_transitions.paid_at * 1000).toISOString()
-      : null,
-    due_at: inv.due_date
-      ? new Date(inv.due_date * 1000).toISOString()
-      : null,
+    issued_at: tsFromEpoch(inv.created),
+    paid_at:
+      status === "paid" && inv.status_transitions?.paid_at
+        ? tsFromEpoch(inv.status_transitions.paid_at)
+        : null,
+    due_at: tsFromEpoch(inv.due_date),
     hosted_invoice_url: inv.hosted_invoice_url ?? null,
     pdf_url: inv.invoice_pdf ?? null,
   };
-
-  if (!row.opco_id) return;
 
   const { data: existing } = await admin
     .from("invoices")
@@ -257,21 +449,40 @@ async function recordInvoicePayment(
     .maybeSingle<{ id: string }>();
 
   let invoiceRowId = existing?.id;
+  let resolution: "updated" | "inserted";
   if (existing) {
-    await admin.from("invoices").update(row).eq("id", existing.id);
+    const { error } = await admin
+      .from("invoices")
+      .update(row)
+      .eq("id", existing.id);
+    if (error) {
+      console.error(
+        `[stripe-webhook] ${event.id} ${event.type} update failed`,
+        error,
+      );
+      return;
+    }
+    resolution = "updated";
   } else {
-    const { data: inserted } = await admin
+    const { data: inserted, error } = await admin
       .from("invoices")
       .insert(row)
       .select("id")
       .maybeSingle<{ id: string }>();
-    invoiceRowId = inserted?.id;
+    if (error || !inserted) {
+      console.error(
+        `[stripe-webhook] ${event.id} ${event.type} insert failed`,
+        error,
+      );
+      return;
+    }
+    invoiceRowId = inserted.id;
+    resolution = "inserted";
   }
 
-  // For subscription renewals/paid invoices, trigger the CRA renewal
-  // residual. Enrollment commissions fire off customer.subscription.created.
+  // CRA renewal residual fires on paid renewal / upgrade only.
   if (
-    succeeded &&
+    status === "paid" &&
     invoiceRowId &&
     subRow?.id &&
     (kind === "subscription_renewal" || kind === "subscription_upgrade")
@@ -282,35 +493,51 @@ async function recordInvoicePayment(
     });
   }
 
-  // Failed payments → flag subscription past_due.
-  if (!succeeded && subRow?.id) {
+  // Failed payments flip the subscription into past_due.
+  if (event.type === "invoice.payment_failed" && subRow?.id) {
     await admin
       .from("subscriptions")
       .update({ status: "past_due" })
       .eq("id", subRow.id);
   }
+
+  console.log(
+    `[stripe-webhook] ${event.id} ${event.type} done inv=${inv.id} row=${invoiceRowId} ${resolution} sub_row=${subRow?.id ?? "none"} status=${status} kind=${kind}`,
+  );
 }
+
+// ---------------------------------------------------------------
+// Charges + Connect accounts
+// ---------------------------------------------------------------
 
 async function reverseCommissionsForCharge(event: Stripe.Event): Promise<void> {
   const charge = event.data.object as StripeChargeLoose;
   const admin = createAdminClient();
+  console.log(
+    `[stripe-webhook] ${event.id} ${event.type} start charge=${charge.id}`,
+  );
 
-  const stripeInvoiceId = charge.invoice
-    ? typeof charge.invoice === "string"
-      ? charge.invoice
-      : charge.invoice.id
-    : null;
-  if (!stripeInvoiceId) return;
+  const stripeInvoiceId = stripeIdFromRef(charge.invoice);
+  if (!stripeInvoiceId) {
+    console.log(
+      `[stripe-webhook] ${event.id} ${event.type} skip — no invoice on charge=${charge.id}`,
+    );
+    return;
+  }
 
   const { data: invoice } = await admin
     .from("invoices")
     .select("id, total_cents")
     .eq("stripe_invoice_id", stripeInvoiceId)
     .maybeSingle<{ id: string; total_cents: number }>();
-  if (!invoice) return;
+  if (!invoice) {
+    console.log(
+      `[stripe-webhook] ${event.id} ${event.type} skip — no invoice row for ${stripeInvoiceId}`,
+    );
+    return;
+  }
 
-  // Reverse any pending/approved commissions tied to this invoice.
-  await admin
+  const { data, error } = await admin
     .from("commissions")
     .update({
       status: "reversed",
@@ -318,34 +545,148 @@ async function reverseCommissionsForCharge(event: Stripe.Event): Promise<void> {
     })
     .eq("source_type", "invoice")
     .eq("source_id", invoice.id)
-    .in("status", ["pending", "approved", "paid"]);
+    .in("status", ["pending", "approved", "paid"])
+    .select("id");
+  const count = (data ?? []).length;
+  console.log(
+    `[stripe-webhook] ${event.id} ${event.type} done charge=${charge.id} invoice_row=${invoice.id} reversed=${count}${error ? ` error=${error.message}` : ""}`,
+  );
 }
 
 async function syncConnectAccount(event: Stripe.Event): Promise<void> {
   const account = event.data.object as Stripe.Account;
   const admin = createAdminClient();
+  console.log(
+    `[stripe-webhook] ${event.id} ${event.type} start account=${account.id}`,
+  );
 
   const { data: row } = await admin
     .from("opco_stripe_accounts")
     .select("id, opco_id")
     .eq("stripe_account_id", account.id)
     .maybeSingle<{ id: string; opco_id: string }>();
-  if (!row) return;
+  if (!row) {
+    console.log(
+      `[stripe-webhook] ${event.id} ${event.type} skip — no opco row for ${account.id}`,
+    );
+    return;
+  }
 
-  await admin
+  const { error } = await admin
     .from("opco_stripe_accounts")
     .update({
       charges_enabled: Boolean(account.charges_enabled),
       payouts_enabled: Boolean(account.payouts_enabled),
       details_submitted: Boolean(account.details_submitted),
-      disabled_reason:
-        account.requirements?.disabled_reason
-          ? String(account.requirements.disabled_reason)
-          : null,
+      disabled_reason: account.requirements?.disabled_reason
+        ? String(account.requirements.disabled_reason)
+        : null,
       onboarding_completed_at:
         account.details_submitted && account.charges_enabled
           ? new Date().toISOString()
           : null,
     })
     .eq("id", row.id);
+  console.log(
+    `[stripe-webhook] ${event.id} ${event.type} done account=${account.id} charges=${account.charges_enabled} payouts=${account.payouts_enabled}${error ? ` error=${error.message}` : ""}`,
+  );
+}
+
+// ---------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------
+
+function stripeIdFromRef(
+  ref: string | { id?: string } | null | undefined,
+): string | null {
+  if (!ref) return null;
+  if (typeof ref === "string") return ref;
+  return ref.id ?? null;
+}
+
+function tsFromEpoch(seconds: number | null | undefined): string | null {
+  if (!seconds) return null;
+  return new Date(seconds * 1000).toISOString();
+}
+
+function pickFrequencyCents(
+  plan: {
+    annual_price_cents: number;
+    monthly_price_cents: number;
+    quarterly_price_cents: number;
+  },
+  frequency: SubscriptionFrequency,
+): number {
+  return frequency === "annual"
+    ? plan.annual_price_cents
+    : frequency === "monthly"
+      ? plan.monthly_price_cents
+      : plan.quarterly_price_cents;
+}
+
+async function planByStripePriceId(
+  admin: SupabaseAdmin,
+  priceId: string,
+): Promise<{
+  plan_id: string;
+  frequency: SubscriptionFrequency;
+  price_cents: number;
+} | null> {
+  const { data: plan } = await admin
+    .from("subscription_plans")
+    .select(
+      "id, annual_price_cents, monthly_price_cents, quarterly_price_cents, stripe_price_annual_id, stripe_price_monthly_id, stripe_price_quarterly_id",
+    )
+    .or(
+      `stripe_price_annual_id.eq.${priceId},stripe_price_monthly_id.eq.${priceId},stripe_price_quarterly_id.eq.${priceId}`,
+    )
+    .maybeSingle<{
+      id: string;
+      annual_price_cents: number;
+      monthly_price_cents: number;
+      quarterly_price_cents: number;
+      stripe_price_annual_id: string | null;
+      stripe_price_monthly_id: string | null;
+      stripe_price_quarterly_id: string | null;
+    }>();
+  if (!plan) return null;
+  const frequency: SubscriptionFrequency =
+    plan.stripe_price_annual_id === priceId
+      ? "annual"
+      : plan.stripe_price_monthly_id === priceId
+        ? "monthly"
+        : "quarterly";
+  return {
+    plan_id: plan.id,
+    frequency,
+    price_cents: pickFrequencyCents(plan, frequency),
+  };
+}
+
+async function memberIdFromCustomer(
+  admin: SupabaseAdmin,
+  inv: StripeInvoiceLoose,
+): Promise<string | null> {
+  const customerId = stripeIdFromRef(inv.customer);
+  if (!customerId) return null;
+  const { data } = await admin
+    .from("members")
+    .select("id")
+    .eq("stripe_customer_id", customerId)
+    .maybeSingle<{ id: string }>();
+  return data?.id ?? null;
+}
+
+async function opcoIdFromCustomer(
+  admin: SupabaseAdmin,
+  inv: StripeInvoiceLoose,
+): Promise<string | null> {
+  const customerId = stripeIdFromRef(inv.customer);
+  if (!customerId) return null;
+  const { data } = await admin
+    .from("members")
+    .select("opco_id")
+    .eq("stripe_customer_id", customerId)
+    .maybeSingle<{ opco_id: string | null }>();
+  return data?.opco_id ?? null;
 }
