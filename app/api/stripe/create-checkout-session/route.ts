@@ -4,6 +4,7 @@ import { requireSession } from "@/lib/auth";
 import { canEnrollMember } from "@/lib/rbac";
 import { createCheckoutSession } from "@/lib/stripe/subscriptions";
 import { logActivity } from "@/lib/activity";
+import { getSiteUrl } from "@/lib/site-url";
 
 export const runtime = "nodejs";
 
@@ -33,8 +34,7 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const appUrl =
-    process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const appUrl = getSiteUrl();
 
   try {
     const result = await createCheckoutSession({
